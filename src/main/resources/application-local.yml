@@ -1,0 +1,4 @@
+# Local development still validates JWTs. Configure Keycloak as described in README.
+logging:
+  level:
+    ua.votivo.poll: DEBUG

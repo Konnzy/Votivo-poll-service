@@ -1,0 +1,33 @@
+services:
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_DB: polls
+      POSTGRES_USER: ${DB_USERNAME:-poll}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env}
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - poll-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+  poll-service:
+    build: .
+    profiles: ["app"]
+    ports:
+      - "127.0.0.1:8082:8082"
+    environment:
+      DB_URL: jdbc:postgresql://postgres:5432/polls
+      DB_USERNAME: ${DB_USERNAME:-poll}
+      DB_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env}
+      KEYCLOAK_ISSUER_URI: ${KEYCLOAK_ISSUER_URI:-http://localhost:8080/realms/votivo}
+      KEYCLOAK_JWK_SET_URI: ${CONTAINER_KEYCLOAK_JWK_SET_URI:-http://host.docker.internal:8080/realms/votivo/protocol/openid-connect/certs}
+      KEYCLOAK_AUDIENCE: ${KEYCLOAK_AUDIENCE:-poll-service}
+    depends_on:
+      postgres:
+        condition: service_healthy
+volumes:
+  poll-data:

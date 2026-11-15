@@ -1,0 +1,31 @@
+server:
+  port: ${SERVER_PORT:8082}
+  error:
+    include-message: never
+    include-stacktrace: never
+spring:
+  application:
+    name: votivo-poll-service
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5433/polls}
+    username: ${DB_USERNAME:poll}
+    password: ${DB_PASSWORD}
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        jdbc:
+          time_zone: UTC
+  flyway:
+    enabled: true
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: ${KEYCLOAK_ISSUER_URI:http://localhost:8080/realms/votivo}
+          jwk-set-uri: ${KEYCLOAK_JWK_SET_URI:http://localhost:8080/realms/votivo/protocol/openid-connect/certs}
+app:
+  security:
+    audience: ${KEYCLOAK_AUDIENCE:poll-service}
