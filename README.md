@@ -71,14 +71,3 @@ GitHub Actions runs the build and PostgreSQL 18 tests.
 Vote Service and RabbitMQ integration is pending. Closing or blocking a poll currently changes only local state; events are not delivered to other services.
 Deletion is limited to never-published drafts until Vote Service provides a coordinated no-votes check.
 Anonymity is stored as metadata; Vote/Result services must enforce it. Full-system Keycloak integration and performance/scaling requirements have not been verified.
-
-## Team
-
-| Member | Responsibility |
-| --- | --- |
-| D. Kholodenko | Poll Service |
-| V. Buriak | User Service, Keycloak, API Gateway |
-| R. Kolisnychenko | Result Service |
-| Y. Reil | Vote Service |
-
-Submit changes through reviewed pull requests. After merging, update the Poll Service submodule in `koliruslik/Votivo` through a separate PR.
