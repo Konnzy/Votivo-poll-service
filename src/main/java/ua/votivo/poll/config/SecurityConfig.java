@@ -24,6 +24,8 @@ public class SecurityConfig {
         return http.csrf(csrf -> csrf.disable())
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
+                        .requestMatchers(HttpMethod.GET, "/actuator/health/liveness",
+                                "/actuator/health/readiness").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/polls/mine").authenticated()
                         .requestMatchers(HttpMethod.GET, "/api/v1/polls", "/api/v1/polls/*",
                                 "/api/v1/polls/by-link/*").permitAll()

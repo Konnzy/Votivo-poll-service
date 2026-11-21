@@ -50,6 +50,27 @@ class PostgresPersistenceTest {
                 .isInstanceOf(ObjectOptimisticLockingFailureException.class);
     }
 
+    @Test void failedTransactionRestoresContentAndChildren() {
+        var poll = repository.saveAndFlush(new Poll("owner", "Original", "", AccessType.PUBLIC, true,
+                List.of(question("First"), question("Second"))));
+        var originalQuestionIds = jdbc.queryForList("SELECT id FROM questions ORDER BY id", java.util.UUID.class);
+        var originalOptionIds = jdbc.queryForList("SELECT id FROM answer_options ORDER BY id", java.util.UUID.class);
+        assertThatThrownBy(() -> transaction.executeWithoutResult(status -> {
+            var loaded = repository.findById(poll.getId()).orElseThrow();
+            loaded.replaceContent("Changed", "", AccessType.LINK, false, List.of(question("Replacement")));
+            repository.flush();
+            throw new IllegalStateException("Simulated failure after database writes");
+        })).isInstanceOf(IllegalStateException.class);
+        var restored = repository.findById(poll.getId()).orElseThrow();
+        assertThat(restored.getTitle()).isEqualTo("Original");
+        assertThat(restored.getAccessType()).isEqualTo(AccessType.PUBLIC);
+        assertThat(restored.isAnonymous()).isTrue();
+        assertThat(jdbc.queryForList("SELECT id FROM questions ORDER BY id", java.util.UUID.class))
+                .containsExactlyElementsOf(originalQuestionIds);
+        assertThat(jdbc.queryForList("SELECT id FROM answer_options ORDER BY id", java.util.UUID.class))
+                .containsExactlyElementsOf(originalOptionIds);
+    }
+
     private Question question(String text) {
         return new Question(text, QuestionType.SINGLE, List.of(new AnswerOption("A"), new AnswerOption("B")));
     }

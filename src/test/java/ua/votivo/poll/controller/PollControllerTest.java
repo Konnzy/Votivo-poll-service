@@ -2,6 +2,8 @@ package ua.votivo.poll.controller;
 
 import com.jayway.jsonpath.JsonPath;
 import org.junit.jupiter.api.*;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
@@ -11,6 +13,7 @@ import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.json.JsonCompareMode;
 import org.springframework.test.web.servlet.request.RequestPostProcessor;
 import ua.votivo.poll.repository.PollRepository;
 import java.util.Collections;
@@ -163,6 +166,54 @@ class PollControllerTest {
         mvc.perform(get(BASE).param("page", "-1")).andExpect(status().isBadRequest());
         mvc.perform(get(BASE + "/not-a-uuid")).andExpect(status().isBadRequest());
         mvc.perform(get(BASE + "/" + UUID.randomUUID())).andExpect(status().isNotFound());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"PUBLISHED", "CLOSED", "ARCHIVED"})
+    void contentIsImmutableAfterPublicationAndRejectedChangesLeaveItUntouched(String targetState) throws Exception {
+        String id = create(VALID);
+        transition(id, "publish", "PUBLISHED");
+        if (!targetState.equals("PUBLISHED")) transition(id, "close", "CLOSED");
+        if (targetState.equals("ARCHIVED")) transition(id, "archive", "ARCHIVED");
+        String before = mvc.perform(get(BASE + "/" + id).with(owner()))
+                .andReturn().getResponse().getContentAsString();
+        mvc.perform(put(BASE + "/" + id).with(owner()).contentType(MediaType.APPLICATION_JSON)
+                .content(VALID.replace("Survey", "Changed").replace("PUBLIC", "LINK")))
+                .andExpect(status().isConflict());
+        mvc.perform(delete(BASE + "/" + id).with(owner())).andExpect(status().isConflict());
+        mvc.perform(get(BASE + "/" + id).with(owner())).andExpect(content().json(before, JsonCompareMode.STRICT));
+    }
+
+    @Test void blockedLinkPollIsHiddenAndItsDraftCannotBeEditedOrPublished() throws Exception {
+        String id = create(body("LINK", QUESTION));
+        String token = mvc.perform(get(BASE + "/" + id).with(owner()))
+                .andReturn().getResponse().getContentAsString();
+        String shareToken = JsonPath.read(token, "$.shareToken");
+        mvc.perform(post("/api/v1/admin/polls/" + id + "/block").with(admin())).andExpect(status().isOk());
+        mvc.perform(put(BASE + "/" + id).with(owner()).contentType(MediaType.APPLICATION_JSON).content(VALID))
+                .andExpect(status().isConflict());
+        mvc.perform(post(BASE + "/" + id + "/publish").with(owner())).andExpect(status().isConflict());
+        mvc.perform(get(BASE + "/by-link/" + shareToken)).andExpect(status().isNotFound());
+        mvc.perform(get(BASE + "/" + id).with(owner())).andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("DRAFT"))
+                .andExpect(jsonPath("$.blocked").value(true));
+    }
+
+    @Test void publicReadsHideShareTokenAndEveryMutationRequiresAuthentication() throws Exception {
+        String id = create(VALID);
+        transition(id, "publish", "PUBLISHED");
+        mvc.perform(get(BASE + "/" + id)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.shareToken").doesNotExist());
+        mvc.perform(put(BASE + "/" + id).contentType(MediaType.APPLICATION_JSON).content(VALID))
+                .andExpect(status().isUnauthorized());
+        for (String action : new String[]{"publish", "close", "archive"}) {
+            mvc.perform(post(BASE + "/" + id + "/" + action)).andExpect(status().isUnauthorized());
+        }
+        mvc.perform(delete(BASE + "/" + id)).andExpect(status().isUnauthorized());
+        mvc.perform(post("/api/v1/admin/polls/" + id + "/block")).andExpect(status().isUnauthorized());
+        mvc.perform(get("/api/v1/admin/polls")).andExpect(status().isUnauthorized());
+        mvc.perform(get(BASE + "/" + id).with(owner())).andExpect(jsonPath("$.status").value("PUBLISHED"))
+                .andExpect(jsonPath("$.blocked").value(false));
     }
 
     private void invalid(String body) throws Exception {
