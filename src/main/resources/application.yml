@@ -1,9 +1,12 @@
 server:
+  shutdown: graceful
   port: ${SERVER_PORT:8082}
   error:
     include-message: never
     include-stacktrace: never
 spring:
+  lifecycle:
+    timeout-per-shutdown-phase: 20s
   application:
     name: votivo-poll-service
   datasource:
@@ -29,3 +32,19 @@ spring:
 app:
   security:
     audience: ${KEYCLOAK_AUDIENCE:poll-service}
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: never
+      show-components: never
+      probes:
+        enabled: true
+      group:
+        liveness:
+          include: livenessState
+        readiness:
+          include: readinessState,db
