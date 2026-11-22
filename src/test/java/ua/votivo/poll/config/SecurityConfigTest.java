@@ -51,22 +51,66 @@ class SecurityConfigTest {
         }
     }
 
-    @Test void mapsOnlyExplicitAdminRealmRole() {
-        var converter = new SecurityConfig().jwtAuthenticationConverter();
-        var admin = Jwt.withTokenValue("test").header("alg", "RS256").subject("admin")
-                .claim("realm_access", Map.of("roles", List.of("ADMIN"))).build();
-        var user = Jwt.withTokenValue("test").header("alg", "RS256").subject("user")
-                .claim("realm_access", Map.of("roles", List.of("USER", "admin", "superadmin"))).build();
-        assertThat(converter.convert(admin).getAuthorities()).extracting(GrantedAuthority::getAuthority).contains("ROLE_ADMIN");
-        assertThat(converter.convert(user).getAuthorities()).extracting(GrantedAuthority::getAuthority).doesNotContain("ROLE_ADMIN");
+    @Test void mapsTheRealmRolesUserAndAdminExactly() {
+        assertThat(authorities("admin")).containsExactlyInAnyOrder("ROLE_ADMIN", "ROLE_USER");
+        assertThat(authorities("user")).containsExactly("ROLE_USER");
+        assertThat(authorities("user", "superadmin", "offline_access")).containsExactly("ROLE_USER");
+        // Realm roles are lower case: look-alikes and unrelated roles grant nothing.
+        assertThat(authorities("ADMIN", "USER", "superadmin", "uma_authorization")).isEmpty();
     }
 
-    private JwtDecoder decoder() { return new SecurityConfig().jwtDecoder(ISSUER, jwks, "poll-service"); }
+    @Test void acceptsOnlyAccessTokens() throws Exception {
+        for (String type : new String[] {"ID", "Refresh", "Offline", null}) {
+            var token = token(ISSUER, "poll-service", "owner", Instant.now().plusSeconds(300), type, null);
+            assertThatThrownBy(() -> decoder().decode(token)).as("typ " + type).isInstanceOf(JwtException.class);
+        }
+    }
+
+    @Test void acceptsTheDpopTypeOfABoundAccessToken() throws Exception {
+        var bound = token(ISSUER, "poll-service", "owner", Instant.now().plusSeconds(300), "DPoP", Map.of("jkt", "t"));
+        assertThat(new SecurityConfig().jwtDecoder(ISSUER, jwks, "poll-service", "gateway-secret").decode(bound).getSubject())
+                .isEqualTo("owner");
+    }
+
+    @Test void rejectsUnsignedAndAlgorithmConfusedTokens() throws Exception {
+        var claims = new JWTClaimsSet.Builder().issuer(ISSUER).audience("poll-service").subject("owner")
+                .claim("typ", "Bearer").expirationTime(Date.from(Instant.now().plusSeconds(300))).build();
+        String unsigned = new PlainJWT(claims).serialize();
+        assertThatThrownBy(() -> decoder().decode(unsigned)).isInstanceOf(JwtException.class);
+        var hs = new SignedJWT(new JWSHeader.Builder(JWSAlgorithm.HS256).keyID(key.getKeyID()).build(), claims);
+        hs.sign(new com.nimbusds.jose.crypto.MACSigner(new byte[64]));
+        assertThatThrownBy(() -> decoder().decode(hs.serialize())).isInstanceOf(JwtException.class);
+    }
+
+    @Test void takesADpopBoundTokenOnlyFromAGateway() throws Exception {
+        var bound = token(ISSUER, "poll-service", "owner", Instant.now().plusSeconds(300), "Bearer",
+                Map.of("jkt", "thumbprint"));
+        // The proof cannot be checked here, so a bound token must not pass as a plain Bearer.
+        assertThatThrownBy(() -> decoder().decode(bound)).isInstanceOf(JwtException.class);
+        assertThat(new SecurityConfig().jwtDecoder(ISSUER, jwks, "poll-service", "gateway-secret").decode(bound).getSubject())
+                .isEqualTo("owner");
+    }
+
+    private Collection<String> authorities(String... roles) {
+        var jwt = Jwt.withTokenValue("test").header("alg", "RS256").subject("someone")
+                .claim("realm_access", Map.of("roles", List.of(roles))).build();
+        return new SecurityConfig().jwtAuthenticationConverter().convert(jwt).getAuthorities().stream()
+                .map(GrantedAuthority::getAuthority).filter(name -> name.startsWith("ROLE_")).toList();
+    }
+
+    private JwtDecoder decoder() { return new SecurityConfig().jwtDecoder(ISSUER, jwks, "poll-service", ""); }
 
     private String token(String issuer, String audience, String subject, Instant expiration) throws Exception {
+        return token(issuer, audience, subject, expiration, "Bearer", null);
+    }
+
+    private String token(String issuer, String audience, String subject, Instant expiration, String type,
+                         Map<String, Object> cnf) throws Exception {
         var claims = new JWTClaimsSet.Builder().issuer(issuer).audience(audience).subject(subject)
-                .issueTime(Date.from(Instant.now().minusSeconds(600))).expirationTime(Date.from(expiration)).build();
-        var jwt = new SignedJWT(new JWSHeader.Builder(JWSAlgorithm.RS256).keyID(key.getKeyID()).build(), claims);
+                .issueTime(Date.from(Instant.now().minusSeconds(600))).expirationTime(Date.from(expiration));
+        if (type != null) claims.claim("typ", type);
+        if (cnf != null) claims.claim("cnf", cnf);
+        var jwt = new SignedJWT(new JWSHeader.Builder(JWSAlgorithm.RS256).keyID(key.getKeyID()).build(), claims.build());
         jwt.sign(new RSASSASigner(key));
         return jwt.serialize();
     }

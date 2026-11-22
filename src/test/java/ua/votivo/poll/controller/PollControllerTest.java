@@ -312,9 +312,14 @@ class PollControllerTest {
         return "{\"title\":\"Survey\",\"description\":\"Description\",\"accessType\":\"" + access
                 + "\",\"anonymous\":true,\"questions\":[" + questions + "]}";
     }
-    private static RequestPostProcessor owner() { return jwt().jwt(jwt -> jwt.subject("owner")); }
-    private static RequestPostProcessor other() { return jwt().jwt(jwt -> jwt.subject("other")); }
+    private static RequestPostProcessor owner() {
+        return jwt().jwt(jwt -> jwt.subject("owner")).authorities(new SimpleGrantedAuthority("ROLE_USER"));
+    }
+    private static RequestPostProcessor other() {
+        return jwt().jwt(jwt -> jwt.subject("other")).authorities(new SimpleGrantedAuthority("ROLE_USER"));
+    }
     private static RequestPostProcessor admin() {
-        return jwt().jwt(jwt -> jwt.subject("admin")).authorities(new SimpleGrantedAuthority("ROLE_ADMIN"));
+        return jwt().jwt(jwt -> jwt.subject("admin"))
+                .authorities(new SimpleGrantedAuthority("ROLE_ADMIN"), new SimpleGrantedAuthority("ROLE_USER"));
     }
 }

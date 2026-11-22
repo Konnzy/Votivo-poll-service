@@ -11,6 +11,7 @@ import org.springframework.context.ApplicationContext;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.json.JsonCompareMode;
@@ -41,7 +42,8 @@ class HealthEndpointTest {
         }
         mvc.perform(get("/actuator/health")).andExpect(status().isUnauthorized());
         mvc.perform(get("/actuator/health/readiness/db")).andExpect(status().isUnauthorized());
-        mvc.perform(get("/actuator/env").with(jwt())).andExpect(status().isNotFound());
+        mvc.perform(get("/actuator/env").with(jwt().authorities(new SimpleGrantedAuthority("ROLE_USER"))))
+                .andExpect(status().isNotFound());
     }
 
     @Test void refusingTrafficFailsReadinessButKeepsLiveness() throws Exception {
