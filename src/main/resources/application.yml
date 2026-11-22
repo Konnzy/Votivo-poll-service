@@ -43,6 +43,8 @@ spring:
 app:
   security:
     audience: ${KEYCLOAK_AUDIENCE:poll-service}
+    # Shared with the gateway (frontend). When set, every /api call must carry it in X-Internal-Auth.
+    internal-secret: ${INTERNAL_AUTH_SECRET:}
   outbox:
     relay:
       enabled: ${OUTBOX_RELAY_ENABLED:true}
