@@ -7,6 +7,7 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.transaction.annotation.Transactional;
 import ua.votivo.poll.dto.request.PollRequest;
 import ua.votivo.poll.dto.response.*;
+import ua.votivo.poll.event.PollEvents;
 import ua.votivo.poll.exception.*;
 import ua.votivo.poll.mapper.PollMapper;
 import ua.votivo.poll.model.Poll;
@@ -23,20 +24,23 @@ public class PollService {
     private final PollAccessService access;
     private final PollValidationService validation;
     private final CurrentUserProvider users;
+    private final PollEvents events;
 
     public PollService(PollRepository repository, PollMapper mapper, PollAccessService access,
-                       PollValidationService validation, CurrentUserProvider users) {
+                       PollValidationService validation, CurrentUserProvider users, PollEvents events) {
         this.repository = repository;
         this.mapper = mapper;
         this.access = access;
         this.validation = validation;
         this.users = users;
+        this.events = events;
     }
 
     @Transactional
     public PollResponse create(PollRequest request) {
         var poll = new Poll(users.require().id(), request.title(), request.description(),
                 request.accessType(), request.anonymous(), mapper.questions(request));
+        poll.allowVoteChange(Boolean.TRUE.equals(request.allowVoteChange()));
         return mapper.response(repository.save(poll), true);
     }
 
@@ -76,6 +80,7 @@ public class PollService {
         validation.requireEditable(poll);
         poll.replaceContent(request.title(), request.description(), request.accessType(),
                 request.anonymous(), mapper.questions(request));
+        poll.allowVoteChange(Boolean.TRUE.equals(request.allowVoteChange()));
         return mapper.response(poll, true);
     }
 
@@ -84,6 +89,7 @@ public class PollService {
         var poll = owned(id);
         validation.requirePublishable(poll);
         poll.publish();
+        events.pollStarted(poll);
         return mapper.response(poll, true);
     }
 
@@ -92,6 +98,7 @@ public class PollService {
         var poll = owned(id);
         validation.requireState(poll, PollStatus.PUBLISHED);
         poll.close();
+        events.pollEnded(poll, PollEvents.REASON_CLOSED);
         return mapper.response(poll, true);
     }
 
@@ -115,7 +122,10 @@ public class PollService {
     @PreAuthorize("hasRole('ADMIN')")
     public PollResponse block(UUID id) {
         var poll = find(id);
+        // Only a published poll can be taking votes; a draft or an ended poll has nothing to stop.
+        boolean takingVotes = poll.getStatus() == PollStatus.PUBLISHED && !poll.isBlocked();
         poll.block();
+        if (takingVotes) events.pollEnded(poll, PollEvents.REASON_BLOCKED);
         return mapper.response(poll, true);
     }
 

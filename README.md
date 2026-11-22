@@ -9,6 +9,7 @@ Poll management microservice for Votivo, built with Java 25, Spring Boot 4.1.2, 
 - Keycloak JWT authentication, owner permissions, and admin moderation.
 - Flyway migrations, optimistic locking, pagination, and validation (50 questions, 20 options per question).
 - Database-aware readiness, independent liveness, and graceful shutdown.
+- Lifecycle events (`poll.started`, `poll.ended`) published to RabbitMQ through a transactional outbox.
 
 ## Architecture
 
@@ -95,10 +96,31 @@ PostgreSQL tests verify migrations, ordered child persistence, cascade deletion,
 
 GitHub Actions runs the build and PostgreSQL 18 tests.
 
+## Events (RabbitMQ)
+
+Poll Service publishes to the durable topic exchange `poll.events.exchange`. Vote Service and Result Service consume the events; each declares and binds its own queue. JSON, snake_case, the AMQP `message_id` is the event id (delivery is at least once, so a consumer drops an id it has already handled).
+
+| Routing key | Published when | Body |
+| --- | --- | --- |
+| `poll.started` | a draft is published | `poll_id`, `title`, `anonymous`, `allow_vote_change`, `questions[{id, text, multiple, options[{id, text}]}]` |
+| `poll.ended` | a published poll is closed by its owner (`reason: "closed"`) or blocked by a moderator (`reason: "blocked"`) | `poll_id`, `reason` |
+
+The content of a published poll cannot change, so `poll.started` is the whole snapshot voting needs. Blocking a draft or a poll that is already closed publishes nothing: no votes are being taken.
+
+Events are written to the `outbox_messages` table in the transaction of the change itself and published by `OutboxRelay` (every `OUTBOX_RELAY_INTERVAL`, default `1s`) with publisher confirms. Publishing is mandatory: an event that no queue is bound for is returned by the broker and stays in the outbox until a consumer declares its queue, so nothing is lost while the other services are still starting. The relay stops at the first failure to keep the order.
+
+`allowVoteChange` (optional in the create/update request, `false` by default) tells Vote Service whether a participant may change or revoke a vote; an anonymous poll never allows it.
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `RABBITMQ_HOST` / `RABBITMQ_PORT` | `localhost` / `5672` | broker address |
+| `RABBITMQ_USER` / `RABBITMQ_PASSWORD` | `guest` / `guest` | broker credentials |
+| `RABBITMQ_VHOST` | `/` | virtual host |
+| `OUTBOX_RELAY_ENABLED` | `true` | switch the relay off (the tests do) |
+| `OUTBOX_RELAY_INTERVAL` | `1s` | how often pending events are published |
+
 ## Current scope
 
-Inter-service integration will use REST and RabbitMQ. The current branch prepares Poll Service internally; shared REST contracts, event formats, and consumers are not introduced here.
-
-Vote Service and RabbitMQ integration is pending. Closing or blocking a poll currently changes only local state; events are not delivered to other services.
+Inter-service integration uses REST and RabbitMQ. Closing or blocking a poll is delivered to Vote and Result Service as `poll.ended`.
 Deletion is limited to never-published drafts until Vote Service provides a coordinated no-votes check.
 Anonymity is stored as metadata; Vote/Result services must enforce it. Full-system Keycloak integration and performance/scaling requirements have not been verified.

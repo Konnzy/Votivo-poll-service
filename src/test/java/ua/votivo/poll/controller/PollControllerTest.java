@@ -15,7 +15,10 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.json.JsonCompareMode;
 import org.springframework.test.web.servlet.request.RequestPostProcessor;
+import ua.votivo.poll.event.OutboxMessage;
+import ua.votivo.poll.event.OutboxRepository;
 import ua.votivo.poll.repository.PollRepository;
+import java.util.List;
 import java.util.Collections;
 import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -34,9 +37,10 @@ class PollControllerTest {
     private static final String VALID = body("PUBLIC", QUESTION);
     @Autowired MockMvc mvc;
     @Autowired PollRepository repository;
+    @Autowired OutboxRepository outbox;
     @MockitoBean JwtDecoder decoder;
 
-    @BeforeEach void clean() { repository.deleteAll(); }
+    @BeforeEach void clean() { repository.deleteAll(); outbox.deleteAll(); }
 
     @Test void creationRequiresAuthentication() throws Exception {
         mvc.perform(post(BASE).contentType(MediaType.APPLICATION_JSON).content(VALID)).andExpect(status().isUnauthorized());
@@ -214,6 +218,82 @@ class PollControllerTest {
         mvc.perform(get("/api/v1/admin/polls")).andExpect(status().isUnauthorized());
         mvc.perform(get(BASE + "/" + id).with(owner())).andExpect(jsonPath("$.status").value("PUBLISHED"))
                 .andExpect(jsonPath("$.blocked").value(false));
+    }
+
+    @Test void publishingQueuesPollStartedWithTheWholeSnapshot() throws Exception {
+        String multiple = "{\"text\":\"Pick any\",\"type\":\"MULTIPLE\",\"options\":[{\"text\":\"A\"},{\"text\":\"B\"}]}";
+        String id = create(body("PUBLIC", QUESTION + "," + multiple).replace("\"anonymous\":true", "\"anonymous\":false,\"allowVoteChange\":true"));
+        assertThat(outbox.findAll()).as("a draft publishes nothing").isEmpty();
+
+        transition(id, "publish", "PUBLISHED");
+
+        List<OutboxMessage> messages = outbox.findAll();
+        assertThat(messages).hasSize(1);
+        OutboxMessage started = messages.getFirst();
+        assertThat(started.getRoutingKey()).isEqualTo("poll.started");
+        String payload = started.getPayload();
+        assertThat((String) JsonPath.read(payload, "$.poll_id")).isEqualTo(id);
+        assertThat((String) JsonPath.read(payload, "$.title")).isEqualTo("Survey");
+        assertThat((Boolean) JsonPath.read(payload, "$.anonymous")).isFalse();
+        assertThat((Boolean) JsonPath.read(payload, "$.allow_vote_change")).isTrue();
+        assertThat((List<?>) JsonPath.read(payload, "$.questions")).hasSize(2);
+        assertThat((Boolean) JsonPath.read(payload, "$.questions[0].multiple")).isFalse();
+        assertThat((Boolean) JsonPath.read(payload, "$.questions[1].multiple")).isTrue();
+        assertThat((List<?>) JsonPath.read(payload, "$.questions[0].options")).hasSize(2);
+        String optionId = JsonPath.read(payload, "$.questions[0].options[1].id");
+        assertThat(UUID.fromString(optionId)).isNotNull();
+        assertThat((String) JsonPath.read(payload, "$.questions[0].options[1].text")).isEqualTo("Go");
+    }
+
+    @Test void allowVoteChangeDefaultsToFalseAndIsReturned() throws Exception {
+        String id = create(VALID);
+        mvc.perform(get(BASE + "/" + id).with(owner())).andExpect(jsonPath("$.allowVoteChange").value(false));
+        mvc.perform(put(BASE + "/" + id).with(owner()).contentType(MediaType.APPLICATION_JSON)
+                .content(VALID.replace("\"anonymous\":true", "\"anonymous\":false,\"allowVoteChange\":true")))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.allowVoteChange").value(true));
+    }
+
+    @Test void closingAndBlockingAPublishedPollQueuePollEnded() throws Exception {
+        String closed = create(VALID);
+        transition(closed, "publish", "PUBLISHED");
+        transition(closed, "close", "CLOSED");
+        String blocked = create(VALID);
+        transition(blocked, "publish", "PUBLISHED");
+        mvc.perform(post("/api/v1/admin/polls/" + blocked + "/block").with(admin())).andExpect(status().isOk());
+
+        List<OutboxMessage> ended = outbox.findAll().stream()
+                .filter(m -> m.getRoutingKey().equals("poll.ended")).toList();
+        assertThat(ended).hasSize(2);
+        assertThat(ended).anySatisfy(m -> {
+            assertThat((String) JsonPath.read(m.getPayload(), "$.poll_id")).isEqualTo(closed);
+            assertThat((String) JsonPath.read(m.getPayload(), "$.reason")).isEqualTo("closed");
+        });
+        assertThat(ended).anySatisfy(m -> {
+            assertThat((String) JsonPath.read(m.getPayload(), "$.poll_id")).isEqualTo(blocked);
+            assertThat((String) JsonPath.read(m.getPayload(), "$.reason")).isEqualTo("blocked");
+        });
+    }
+
+    @Test void blockingADraftOrAnAlreadyClosedPollQueuesNothing() throws Exception {
+        String draft = create(VALID);
+        mvc.perform(post("/api/v1/admin/polls/" + draft + "/block").with(admin())).andExpect(status().isOk());
+        String closed = create(VALID);
+        transition(closed, "publish", "PUBLISHED");
+        transition(closed, "close", "CLOSED");
+        long before = outbox.count();
+
+        mvc.perform(post("/api/v1/admin/polls/" + closed + "/block").with(admin())).andExpect(status().isOk());
+
+        assertThat(outbox.count()).isEqualTo(before);
+        assertThat(outbox.findAll()).extracting(OutboxMessage::getRoutingKey)
+                .containsExactlyInAnyOrder("poll.started", "poll.ended");
+    }
+
+    @Test void aRejectedTransitionQueuesNothing() throws Exception {
+        String id = create(VALID);
+        mvc.perform(post(BASE + "/" + id + "/close").with(owner())).andExpect(status().isConflict());
+        mvc.perform(post(BASE + "/" + id + "/publish").with(other())).andExpect(status().isForbidden());
+        assertThat(outbox.findAll()).isEmpty();
     }
 
     private void invalid(String body) throws Exception {

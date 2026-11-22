@@ -11,6 +11,7 @@ public record PollRequest(
         @NotNull @Size(max = 5000) String description,
         @NotNull AccessType accessType,
         @NotNull Boolean anonymous,
+        Boolean allowVoteChange,
         @NotNull @Size(max = 50) List<@NotNull @Valid QuestionRequest> questions) {
 
     public record QuestionRequest(
