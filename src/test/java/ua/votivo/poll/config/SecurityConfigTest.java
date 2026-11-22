@@ -87,8 +87,21 @@ class SecurityConfigTest {
                 Map.of("jkt", "thumbprint"));
         // The proof cannot be checked here, so a bound token must not pass as a plain Bearer.
         assertThatThrownBy(() -> decoder().decode(bound)).isInstanceOf(JwtException.class);
-        assertThat(new SecurityConfig().jwtDecoder(ISSUER, jwks, "poll-service", "gateway-secret").decode(bound).getSubject())
-                .isEqualTo("owner");
+        var behindGateway = new SecurityConfig().jwtDecoder(ISSUER, jwks, "poll-service", "gateway-secret").decode(bound);
+        assertThat(behindGateway.getSubject()).isEqualTo("owner");
+        // Spring refuses a token with `cnf` on the Bearer path; behind the gateway the binding is dropped once verified.
+        assertThat(behindGateway.hasClaim("cnf")).isFalse();
+        assertThat(behindGateway.getAudience()).containsExactly("poll-service");
+    }
+
+    @Test void bindingIsDroppedOnlyAfterTheTokenIsValid() throws Exception {
+        var expiredBound = token(ISSUER, "poll-service", "owner", Instant.now().minusSeconds(300), "DPoP",
+                Map.of("jkt", "t"));
+        var wrongAudienceBound = token(ISSUER, "user-service", "owner", Instant.now().plusSeconds(300), "DPoP",
+                Map.of("jkt", "t"));
+        var gateway = new SecurityConfig().jwtDecoder(ISSUER, jwks, "poll-service", "gateway-secret");
+        assertThatThrownBy(() -> gateway.decode(expiredBound)).isInstanceOf(JwtException.class);
+        assertThatThrownBy(() -> gateway.decode(wrongAudienceBound)).isInstanceOf(JwtException.class);
     }
 
     private Collection<String> authorities(String... roles) {

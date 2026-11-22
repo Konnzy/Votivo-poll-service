@@ -66,7 +66,23 @@ public class SecurityConfig {
         decoder.setJwtValidator(new DelegatingOAuth2TokenValidator<>(
                 JwtValidators.createDefaultWithIssuer(issuer), audienceValidator, subjectValidator,
                 typeValidator, bindingValidator));
-        return decoder;
+        if (!gatewayConfigured) return decoder;
+        // Spring Security refuses a token with `cnf` on the Bearer path after authenticating it (DPoP downgrade
+        // protection), and Poll cannot verify the proof: it never sees the browser's request. Behind the gateway the
+        // proof has already been verified and InternalAuthFilter admits only the gateway, so once the token itself is
+        // valid the binding claim is dropped and the token is used as a plain access token.
+        return token -> withoutBinding(decoder.decode(token));
+    }
+
+    static Jwt withoutBinding(Jwt jwt) {
+        if (!jwt.hasClaim("cnf")) return jwt;
+        return Jwt.withTokenValue(jwt.getTokenValue())
+                .headers(headers -> headers.putAll(jwt.getHeaders()))
+                .claims(claims -> {
+                    claims.putAll(jwt.getClaims());
+                    claims.remove("cnf");
+                })
+                .build();
     }
 
     private static boolean isAccessTokenType(String type) { return "Bearer".equals(type) || "DPoP".equals(type); }
