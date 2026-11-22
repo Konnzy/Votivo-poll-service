@@ -3,3 +3,7 @@ spring:
     url: ${TEST_DB_URL:jdbc:postgresql://localhost:5433/polls_test}
     username: ${TEST_DB_USERNAME:poll}
     password: ${TEST_DB_PASSWORD}
+app:
+  outbox:
+    relay:
+      enabled: false

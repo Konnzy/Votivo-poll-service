@@ -31,6 +31,8 @@ public class Poll {
     @Column(nullable = false)
     private boolean anonymous;
     @Column(nullable = false)
+    private boolean allowVoteChange;
+    @Column(nullable = false)
     private boolean blocked;
     @Column(nullable = false, unique = true)
     private UUID shareToken;
@@ -86,6 +88,8 @@ public class Poll {
         this.updatedAt = archivedAt;
     }
 
+    public void allowVoteChange(boolean allowed) { this.allowVoteChange = allowed; }
+
     public void block() { this.blocked = true; this.updatedAt = Instant.now(); }
     public UUID getId() { return id; }
     public String getOwnerId() { return ownerId; }
@@ -94,6 +98,7 @@ public class Poll {
     public PollStatus getStatus() { return status; }
     public AccessType getAccessType() { return accessType; }
     public boolean isAnonymous() { return anonymous; }
+    public boolean isAllowVoteChange() { return allowVoteChange; }
     public boolean isBlocked() { return blocked; }
     public UUID getShareToken() { return shareToken; }
     public Instant getCreatedAt() { return createdAt; }

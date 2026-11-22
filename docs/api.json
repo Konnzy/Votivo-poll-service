@@ -897,6 +897,11 @@
               "$ref": "#/components/schemas/QuestionRequest"
             },
             "maxItems": 50
+          },
+          "allowVoteChange": {
+            "type": "boolean",
+            "default": false,
+            "description": "Lets a participant change or revoke a vote while the poll is published (Vote Service enforces it). Not allowed in an anonymous poll."
           }
         },
         "required": [
@@ -1093,9 +1098,14 @@
             "items": {
               "$ref": "#/components/schemas/QuestionResponse"
             }
+          },
+          "allowVoteChange": {
+            "type": "boolean"
           }
         },
-        "required": []
+        "required": [
+          "allowVoteChange"
+        ]
       },
       "PollPage": {
         "type": "object",

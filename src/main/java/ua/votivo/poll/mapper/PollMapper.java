@@ -16,7 +16,7 @@ public class PollMapper {
 
     public PollResponse response(Poll poll, boolean includeShareToken) {
         return new PollResponse(poll.getId(), poll.getOwnerId(), poll.getTitle(), poll.getDescription(),
-                poll.getStatus(), poll.getAccessType(), poll.isAnonymous(), poll.isBlocked(),
+                poll.getStatus(), poll.getAccessType(), poll.isAnonymous(), poll.isAllowVoteChange(), poll.isBlocked(),
                 includeShareToken ? poll.getShareToken() : null,
                 poll.getCreatedAt(), poll.getUpdatedAt(), poll.getPublishedAt(), poll.getClosedAt(),
                 poll.getArchivedAt(), poll.getQuestions().stream().map(q ->
