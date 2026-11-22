@@ -25,7 +25,7 @@ Requires JDK 25, Docker Compose, and an available Keycloak instance. Gradle is i
 ```powershell
 Copy-Item .env.example .env
 # Set DB_PASSWORD and adjust Keycloak URLs in .env.
-docker compose up -d postgres
+docker compose up -d postgres rabbitmq
 
 # Spring Boot does not load .env automatically.
 Get-Content .env | Where-Object { $_ -match '^[A-Z_]+=' } | ForEach-Object {
@@ -49,6 +49,10 @@ docker compose --profile app up --build -d --wait
 ```
 
 Container JWKS defaults to `host.docker.internal`; override `CONTAINER_KEYCLOAK_JWK_SET_URI` when needed.
+
+The standalone Compose starts its own RabbitMQ and persists its data in `rabbit-data`. The app connects to `rabbitmq:5672` on the Compose network with the same user, password and virtual host as the broker. Host-side `bootRun` uses `localhost:5674` by default; management is at `http://localhost:15674`. Copy the RabbitMQ settings from `.env.example` into an existing `.env` before using `bootRun`. Host ports are configurable with `RABBITMQ_PORT` and `RABBITMQ_MANAGEMENT_PORT`; the container always uses port `5672`.
+
+This standalone broker is separate from the integration repository's broker. A shared deployment must point all three services at the same broker and virtual host.
 
 ## Health and shutdown
 
@@ -94,11 +98,19 @@ $env:TEST_DB_PASSWORD = $env:DB_PASSWORD
 
 PostgreSQL tests verify migrations, ordered child persistence, cascade deletion, optimistic locking, and rollback of changes to an entire poll.
 
-GitHub Actions runs the build and PostgreSQL 18 tests.
+The delivery tests need both a **disposable RabbitMQ** and the separate test database. They purge the two poll-event queues; use an isolated broker, not the shared development environment:
+
+```powershell
+# Set TEST_DB_URL / TEST_DB_USERNAME / TEST_DB_PASSWORD for the test database.
+# Set RABBITMQ_HOST / RABBITMQ_PORT / RABBITMQ_USER / RABBITMQ_PASSWORD for the test broker.
+./gradlew.bat messagingTest
+```
+
+`postgresTest` includes concurrent-publisher regression coverage. `messagingTest` verifies both durable subscriptions receive events before consumers start, restores a missing subscription, and checks dead-letter compatibility. GitHub Actions runs the build, PostgreSQL 18 tests, and delivery tests against dedicated PostgreSQL/RabbitMQ services.
 
 ## Events (RabbitMQ)
 
-Poll Service publishes to the durable topic exchange `poll.events.exchange`. Vote Service and Result Service consume the events; each declares and binds its own queue. JSON, snake_case, the AMQP `message_id` is the event id (delivery is at least once, so a consumer drops an id it has already handled).
+Poll Service publishes to the durable topic exchange `poll.events.exchange`. Vote Service and Result Service consume the events. Before publishing, Poll Service declares both durable subscriptions: `vote-service.poll-events` and `result-service.poll-events`. These declarations match the consumers, including their `votivo.dlx` dead-letter exchange, `<queue>.dlq` queues and dead-letter routing keys. JSON, snake_case, the AMQP `message_id` is the event id (delivery is at least once, so a consumer drops an id it has already handled).
 
 | Routing key | Published when | Body |
 | --- | --- | --- |
@@ -107,7 +119,9 @@ Poll Service publishes to the durable topic exchange `poll.events.exchange`. Vot
 
 The content of a published poll cannot change, so `poll.started` is the whole snapshot voting needs. Blocking a draft or a poll that is already closed publishes nothing: no votes are being taken.
 
-Events are written to the `outbox_messages` table in the transaction of the change itself and published by `OutboxRelay` (every `OUTBOX_RELAY_INTERVAL`, default `1s`) with publisher confirms. Publishing is mandatory: an event that no queue is bound for is returned by the broker and stays in the outbox until a consumer declares its queue, so nothing is lost while the other services are still starting. The relay stops at the first failure to keep the order.
+Events are written to the `outbox_messages` table in the transaction of the change itself and published by `OutboxRelay` (every `OUTBOX_RELAY_INTERVAL`, default `1s`) with publisher confirms and mandatory publishing. Both subscriptions are declared before every non-empty batch: an offline or not-yet-started consumer has its own durable copy waiting. Failure to declare either subscription keeps the event in the outbox.
+
+Migration V3 adds a singleton `outbox_relay_lock` row. One relay transaction holds it while sending a batch and committing confirmed deletions or retry metadata. Other instances skip the relay lock and try again later; they never skip earlier outbox events. API instances remain independent, but publishing is intentionally serialized. The batch stops at its first failure. Stop old relay versions before rolling out this migration, because older binaries do not acquire the singleton lock. Delivery remains at least once: consumers must deduplicate `message_id`.
 
 `allowVoteChange` (optional in the create/update request, `false` by default) tells Vote Service whether a participant may change or revoke a vote; an anonymous poll never allows it.
 
