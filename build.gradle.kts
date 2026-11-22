@@ -33,7 +33,7 @@ dependencies {
 }
 
 tasks.test {
-    useJUnitPlatform { excludeTags("postgres") }
+    useJUnitPlatform { excludeTags("postgres", "messaging") }
 }
 
 val postgresTest by tasks.registering(Test::class) {
@@ -43,6 +43,15 @@ val postgresTest by tasks.registering(Test::class) {
     classpath = sourceSets.test.get().runtimeClasspath
     useJUnitPlatform { includeTags("postgres") }
     shouldRunAfter(tasks.test)
+}
+
+val messagingTest by tasks.registering(Test::class) {
+    description = "Verifies durable event delivery with real PostgreSQL and RabbitMQ."
+    group = "verification"
+    testClassesDirs = sourceSets.test.get().output.classesDirs
+    classpath = sourceSets.test.get().runtimeClasspath
+    useJUnitPlatform { includeTags("messaging") }
+    shouldRunAfter(postgresTest)
 }
 
 tasks.withType<JavaCompile>().configureEach { options.encoding = "UTF-8" }

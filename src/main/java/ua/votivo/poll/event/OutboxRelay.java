@@ -2,6 +2,7 @@ package ua.votivo.poll.event;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.amqp.core.AmqpAdmin;
 import org.springframework.amqp.core.Message;
 import org.springframework.amqp.core.MessageDeliveryMode;
 import org.springframework.amqp.core.MessageProperties;
@@ -20,9 +21,9 @@ import java.util.concurrent.TimeUnit;
  * Publishes the outbox to RabbitMQ. Delivery is at least once: a crash between the broker confirm and the delete
  * publishes the message again, which is why every consumer drops an event id it has already handled.
  *
- * <p>A message that no queue is bound for is returned by the broker (mandatory publishing). It stays in the outbox
- * and is retried, so an event published before its consumer has declared the queue is not lost. The batch stops at
- * the first failure, which keeps the events in the order they were written.
+ * <p>Both durable consumer queues are declared before each non-empty batch. A singleton database lock keeps
+ * another instance from publishing later events while this instance awaits confirms. The batch stops at the
+ * first failure; the lock is held until deletions and retry metadata commit.
  */
 @Component
 @ConditionalOnProperty(name = "app.outbox.relay.enabled", havingValue = "true", matchIfMissing = true)
@@ -33,11 +34,16 @@ public class OutboxRelay {
     private final OutboxRepository outbox;
     private final RabbitTemplate rabbit;
     private final TransactionTemplate tx;
+    private final OutboxRelayLockRepository locks;
+    private final AmqpAdmin admin;
 
-    public OutboxRelay(OutboxRepository outbox, RabbitTemplate rabbit, TransactionTemplate tx) {
+    public OutboxRelay(OutboxRepository outbox, RabbitTemplate rabbit, TransactionTemplate tx,
+                       OutboxRelayLockRepository locks, AmqpAdmin admin) {
         this.outbox = outbox;
         this.rabbit = rabbit;
         this.tx = tx;
+        this.locks = locks;
+        this.admin = admin;
     }
 
     @Scheduled(fixedDelayString = "${app.outbox.relay.interval:1s}")
@@ -50,8 +56,14 @@ public class OutboxRelay {
     }
 
     private void publishPending() {
+        if (locks.tryAcquire().isEmpty()) return;
+        boolean topologyDeclared = false;
         for (OutboxMessage message : outbox.findTop100ByOrderByCreatedAtAscIdAsc()) {
             try {
+                if (!topologyDeclared) {
+                    EventTopology.declare(admin);
+                    topologyDeclared = true;
+                }
                 publish(message);
             } catch (Exception e) {
                 if (e instanceof InterruptedException) Thread.currentThread().interrupt();
