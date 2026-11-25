@@ -6,4 +6,4 @@ import java.time.Instant;
 import java.util.UUID;
 
 public record PollSummaryResponse(UUID id, String title, PollStatus status, AccessType accessType,
-                                  boolean anonymous, boolean blocked, Instant createdAt) { }
+                                  boolean anonymous, boolean blocked, Instant createdAt, Instant endsAt) { }

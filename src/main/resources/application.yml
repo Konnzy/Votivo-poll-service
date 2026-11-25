@@ -41,10 +41,14 @@ spring:
           issuer-uri: ${KEYCLOAK_ISSUER_URI:http://localhost:8080/realms/votivo}
           jwk-set-uri: ${KEYCLOAK_JWK_SET_URI:http://localhost:8080/realms/votivo/protocol/openid-connect/certs}
 app:
+  expiration:
+    enabled: ${POLL_EXPIRATION_ENABLED:true}
+    interval: ${POLL_EXPIRATION_INTERVAL:5s}
   security:
     audience: ${KEYCLOAK_AUDIENCE:poll-service}
     # Shared with the gateway (frontend). When set, every /api call must carry it in X-Internal-Auth.
     internal-secret: ${INTERNAL_AUTH_SECRET:}
+    account-deletion-secret: ${ACCOUNT_DELETION_SECRET:}
   outbox:
     relay:
       enabled: ${OUTBOX_RELAY_ENABLED:true}

@@ -5,6 +5,7 @@ Poll management microservice for Votivo, built with Java 25, Spring Boot 4.1.2, 
 ## Features
 
 - Draft creation and editing; lifecycle: `DRAFT → PUBLISHED → CLOSED → ARCHIVED`.
+- Scheduled end (`endsAt`, ISO 8601 instant): optional for a draft, mandatory and future for publication.
 - Public and link-based access, anonymity settings, single/multiple-choice questions.
 - Keycloak JWT authentication, owner permissions, and admin moderation.
 - Flyway migrations, optimistic locking, pagination, and validation (50 questions, 20 options per question).
@@ -17,6 +18,13 @@ Layered architecture: **Controller → Service → Repository → PostgreSQL**.
 Packages under `src/main/java/ua/votivo/poll` separate controllers, DTOs, services, models, repositories, mapping, security, and error handling.
 
 API documentation: [OpenAPI specification](docs/api.json).
+
+Deadlines are stored in UTC and cannot be changed after publication. A background job checks due
+polls every five seconds, locks and rechecks each poll, and commits `CLOSED` with a `poll.ended`
+outbox event in the same transaction. Configure `POLL_EXPIRATION_ENABLED` and
+`POLL_EXPIRATION_INTERVAL` as needed. Vote Service and the gateway also enforce the deadline,
+so voting does not depend on scheduler or broker latency. Previously published polls retain a null
+deadline and their existing manual-close behavior.
 
 ## Run locally
 
@@ -138,3 +146,16 @@ Migration V3 adds a singleton `outbox_relay_lock` row. One relay transaction hol
 Inter-service integration uses REST and RabbitMQ. Closing or blocking a poll is delivered to Vote and Result Service as `poll.ended`.
 Deletion is limited to never-published drafts until Vote Service provides a coordinated no-votes check.
 Anonymity is stored as metadata; Vote/Result services must enforce it. Full-system Keycloak integration and performance/scaling requirements have not been verified.
+
+
+## Account deletion coordination
+
+User Service calls PUT `/internal/v1/users/{id}/deletion` with X-Account-Deletion-Secret.
+Configure ACCOUNT_DELETION_SECRET identically in both services; without it internal access is denied.
+The operation returns 409 when the owner has any PUBLISHED polls (including blocked ones);
+DRAFT, CLOSED and ARCHIVED are allowed. On success, the owner is reserved and the operation is idempotent.
+The persistent poll_owner_lifecycle row is locked by both reservations and owner mutations,
+so an in-flight publication either commits before the check and prevents deletion, or is refused.
+The reservation also rejects mutations through already issued access tokens after deletion.
+DELETE on the same internal path releases a reservation when local account deletion did not commit.
+The gateway never exposes these internal routes or forwards their credential.

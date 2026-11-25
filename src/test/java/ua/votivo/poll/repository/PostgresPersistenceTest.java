@@ -18,8 +18,28 @@ class PostgresPersistenceTest {
     @Autowired PollRepository repository;
     @Autowired JdbcTemplate jdbc;
     @Autowired org.springframework.transaction.support.TransactionTemplate transaction;
+    @Autowired ua.votivo.poll.service.PollExpirationService expiration;
+    @Autowired ua.votivo.poll.event.OutboxRepository outbox;
 
     @BeforeEach void clean() { repository.deleteAll(); }
+
+    @Test void deadlineSurvivesPersistenceAndConcurrentWorkersCloseOnlyOnce() throws Exception {
+        var deadline = java.time.Instant.parse("2099-12-31T12:00:00Z");
+        var poll = new Poll("owner", "Scheduled", "", AccessType.PUBLIC, false, List.of());
+        poll.endsAt(deadline);
+        poll.publish();
+        repository.saveAndFlush(poll);
+        assertThat(repository.findById(poll.getId()).orElseThrow().getEndsAt()).isEqualTo(deadline);
+        try (var workers = java.util.concurrent.Executors.newFixedThreadPool(2)) {
+            var first = workers.submit(() -> expiration.closeIfDue(poll.getId(), deadline));
+            var second = workers.submit(() -> expiration.closeIfDue(poll.getId(), deadline));
+            first.get(10, java.util.concurrent.TimeUnit.SECONDS);
+            second.get(10, java.util.concurrent.TimeUnit.SECONDS);
+        }
+        assertThat(repository.findById(poll.getId()).orElseThrow().getStatus()).isEqualTo(PollStatus.CLOSED);
+        assertThat(outbox.findAll().stream().filter(e -> e.getRoutingKey().equals("poll.ended")
+                && e.getPayload().contains(poll.getId().toString()))).hasSize(1);
+    }
 
     @Test void migratesPersistsReplacesAndCascadesInPostgres() {
         var poll = repository.saveAndFlush(new Poll("owner", "Survey", "", AccessType.PUBLIC, true,

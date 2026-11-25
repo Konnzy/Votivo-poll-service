@@ -38,6 +38,7 @@ class PollControllerTest {
     @Autowired MockMvc mvc;
     @Autowired PollRepository repository;
     @Autowired OutboxRepository outbox;
+    @Autowired ua.votivo.poll.service.PollExpirationService expiration;
     @MockitoBean JwtDecoder decoder;
 
     @BeforeEach void clean() { repository.deleteAll(); outbox.deleteAll(); }
@@ -47,12 +48,62 @@ class PollControllerTest {
         mvc.perform(get(BASE + "/mine")).andExpect(status().isUnauthorized());
     }
 
+    @Test void draftsMayOmitDeadlineButPublicationRequiresItAndRejectsPastDates() throws Exception {
+        String noDeadline = VALID.replace("\"endsAt\":\"2099-12-31T12:00:00Z\",", "");
+        String id = create(noDeadline);
+        mvc.perform(post(BASE + "/" + id + "/publish").with(owner())).andExpect(status().isConflict());
+        mvc.perform(post(BASE).with(owner()).contentType(MediaType.APPLICATION_JSON)
+                .content(VALID.replace("2099-12-31T12:00:00Z", "2000-01-01T00:00:00Z")))
+                .andExpect(status().isBadRequest());
+        mvc.perform(put(BASE + "/" + id).with(owner()).contentType(MediaType.APPLICATION_JSON).content(VALID))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.endsAt").value("2099-12-31T12:00:00Z"));
+        transition(id, "publish", "PUBLISHED");
+        assertThat(outbox.findAll().getFirst().getPayload()).contains("ends_at", "2099-12-31");
+    }
+
+    @Test void expirationClosesOnlyDuePollsAndEnqueuesExactlyOneEndEvent() throws Exception {
+        String id = create(VALID);
+        transition(id, "publish", "PUBLISHED");
+        var due = java.time.Instant.parse("2099-12-31T12:00:00Z");
+        expiration.closeIfDue(UUID.fromString(id), due.minusSeconds(1));
+        mvc.perform(get(BASE + "/" + id)).andExpect(jsonPath("$.status").value("PUBLISHED"));
+        assertThat(repository.findDueIds(ua.votivo.poll.model.enums.PollStatus.PUBLISHED, due,
+                org.springframework.data.domain.PageRequest.of(0, 100))).contains(UUID.fromString(id));
+        expiration.closeIfDue(UUID.fromString(id), due);
+        expiration.closeIfDue(UUID.fromString(id), due);
+        mvc.perform(get(BASE + "/" + id)).andExpect(jsonPath("$.status").value("CLOSED"))
+                .andExpect(jsonPath("$.closedAt").isNotEmpty());
+        assertThat(outbox.findAll().stream().filter(e -> e.getRoutingKey().equals("poll.ended"))).hasSize(1);
+        String draft = create(VALID);
+        expiration.closeIfDue(UUID.fromString(draft), due);
+        mvc.perform(get(BASE + "/" + draft).with(owner())).andExpect(jsonPath("$.status").value("DRAFT"));
+    }
+
     @Test void createsDraftWithIdentityFromJwtAndLocation() throws Exception {
         mvc.perform(post(BASE).with(owner()).contentType(MediaType.APPLICATION_JSON).content(VALID))
                 .andExpect(status().isCreated()).andExpect(header().exists("Location"))
                 .andExpect(jsonPath("$.ownerId").value("owner"))
                 .andExpect(jsonPath("$.status").value("DRAFT"))
                 .andExpect(jsonPath("$.questions[0].options[1].text").value("Go"));
+    }
+
+    @Test void administratorCanReviewAndBlockButCannotUseOwnerActionsEvenWithUserRole() throws Exception {
+        String id = create(VALID);
+        var adminOwner = jwt().jwt(j -> j.subject("owner")).authorities(
+                new SimpleGrantedAuthority("ROLE_USER"), new SimpleGrantedAuthority("ROLE_ADMIN"));
+        mvc.perform(get(BASE + "/" + id).with(adminOwner)).andExpect(status().isOk());
+        mvc.perform(get(BASE + "/mine").with(adminOwner)).andExpect(status().isForbidden());
+        mvc.perform(post(BASE).with(adminOwner).contentType(MediaType.APPLICATION_JSON).content(VALID))
+                .andExpect(status().isForbidden());
+        mvc.perform(put(BASE + "/" + id).with(adminOwner).contentType(MediaType.APPLICATION_JSON).content(VALID))
+                .andExpect(status().isForbidden());
+        mvc.perform(delete(BASE + "/" + id).with(adminOwner)).andExpect(status().isForbidden());
+        for (String action : new String[]{"publish", "close", "archive"}) {
+            mvc.perform(post(BASE + "/" + id + "/" + action).with(adminOwner)).andExpect(status().isForbidden());
+        }
+        mvc.perform(get("/api/v1/admin/polls").with(adminOwner)).andExpect(status().isOk());
+        mvc.perform(post("/api/v1/admin/polls/" + id + "/block").with(adminOwner))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.blocked").value(true));
     }
 
     @Test void completeLifecyclePreservesArchivedContent() throws Exception {
@@ -310,7 +361,7 @@ class PollControllerTest {
     }
     private static String body(String access, String questions) {
         return "{\"title\":\"Survey\",\"description\":\"Description\",\"accessType\":\"" + access
-                + "\",\"anonymous\":true,\"questions\":[" + questions + "]}";
+                + "\",\"anonymous\":true,\"endsAt\":\"2099-12-31T12:00:00Z\",\"questions\":[" + questions + "]}";
     }
     private static RequestPostProcessor owner() {
         return jwt().jwt(jwt -> jwt.subject("owner")).authorities(new SimpleGrantedAuthority("ROLE_USER"));

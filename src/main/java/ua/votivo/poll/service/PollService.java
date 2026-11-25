@@ -25,22 +25,27 @@ public class PollService {
     private final PollValidationService validation;
     private final CurrentUserProvider users;
     private final PollEvents events;
+    private final PollOwnerLifecycleService lifecycle;
 
     public PollService(PollRepository repository, PollMapper mapper, PollAccessService access,
-                       PollValidationService validation, CurrentUserProvider users, PollEvents events) {
+                       PollValidationService validation, CurrentUserProvider users, PollEvents events, PollOwnerLifecycleService lifecycle) {
         this.repository = repository;
         this.mapper = mapper;
         this.access = access;
         this.validation = validation;
         this.users = users;
         this.events = events;
+        this.lifecycle = lifecycle;
     }
 
     @Transactional
+    @PreAuthorize("!hasRole('ADMIN')")
     public PollResponse create(PollRequest request) {
+        lifecycle.requireActiveOwner(users.require().id());
         var poll = new Poll(users.require().id(), request.title(), request.description(),
                 request.accessType(), request.anonymous(), mapper.questions(request));
         poll.allowVoteChange(Boolean.TRUE.equals(request.allowVoteChange()));
+        poll.endsAt(request.endsAt());
         return mapper.response(repository.save(poll), true);
     }
 
@@ -65,6 +70,7 @@ public class PollService {
                 AccessType.PUBLIC, PollStatus.PUBLISHED, page(page, size)).map(mapper::summary));
     }
 
+    @PreAuthorize("!hasRole('ADMIN')")
     public PageResponse<PollSummaryResponse> mine(int page, int size) {
         return PageResponse.from(repository.findByOwnerId(users.require().id(), page(page, size)).map(mapper::summary));
     }
@@ -75,16 +81,19 @@ public class PollService {
     }
 
     @Transactional
+    @PreAuthorize("!hasRole('ADMIN')")
     public PollResponse update(UUID id, PollRequest request) {
         var poll = owned(id);
         validation.requireEditable(poll);
         poll.replaceContent(request.title(), request.description(), request.accessType(),
                 request.anonymous(), mapper.questions(request));
+        poll.endsAt(request.endsAt());
         poll.allowVoteChange(Boolean.TRUE.equals(request.allowVoteChange()));
         return mapper.response(poll, true);
     }
 
     @Transactional
+    @PreAuthorize("!hasRole('ADMIN')")
     public PollResponse publish(UUID id) {
         var poll = owned(id);
         validation.requirePublishable(poll);
@@ -94,6 +103,7 @@ public class PollService {
     }
 
     @Transactional
+    @PreAuthorize("!hasRole('ADMIN')")
     public PollResponse close(UUID id) {
         var poll = owned(id);
         validation.requireState(poll, PollStatus.PUBLISHED);
@@ -103,6 +113,7 @@ public class PollService {
     }
 
     @Transactional
+    @PreAuthorize("!hasRole('ADMIN')")
     public PollResponse archive(UUID id) {
         var poll = owned(id);
         validation.requireState(poll, PollStatus.CLOSED);
@@ -111,6 +122,7 @@ public class PollService {
     }
 
     @Transactional
+    @PreAuthorize("!hasRole('ADMIN')")
     public void delete(UUID id) {
         var poll = owned(id);
         // Until Vote Service supplies a coordinated no-votes check, only never-published drafts are deletable.
@@ -130,6 +142,7 @@ public class PollService {
     }
 
     private Poll owned(UUID id) {
+        lifecycle.requireActiveOwner(users.require().id());
         var poll = find(id);
         access.requireOwner(poll);
         return poll;

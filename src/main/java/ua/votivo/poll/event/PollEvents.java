@@ -40,6 +40,7 @@ public class PollEvents {
         event.put("title", poll.getTitle());
         event.put("anonymous", poll.isAnonymous());
         event.put("allow_vote_change", poll.isAllowVoteChange());
+        event.put("ends_at", poll.getEndsAt());
         event.put("questions", poll.getQuestions().stream().map(question -> {
             Map<String, Object> q = new LinkedHashMap<>();
             q.put("id", question.getId());

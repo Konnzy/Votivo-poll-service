@@ -14,6 +14,7 @@ import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.oauth2.server.resource.web.authentication.BearerTokenAuthenticationFilter;
 import ua.votivo.poll.security.InternalAuthFilter;
+import ua.votivo.poll.security.AccountDeletionAuthFilter;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Map;
@@ -23,7 +24,8 @@ import java.util.Map;
 public class SecurityConfig {
     @Bean
     SecurityFilterChain securityFilterChain(HttpSecurity http,
-            @Value("${app.security.internal-secret:}") String internalSecret) throws Exception {
+            @Value("${app.security.internal-secret:}") String internalSecret,
+            @Value("${app.security.account-deletion-secret:}") String deletionSecret) throws Exception {
         return http.csrf(csrf -> csrf.disable())
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
@@ -32,11 +34,13 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.GET, "/api/v1/polls/mine").hasAnyRole("USER", "ADMIN")
                         .requestMatchers(HttpMethod.GET, "/api/v1/polls", "/api/v1/polls/*",
                                 "/api/v1/polls/by-link/*").permitAll()
+                        .requestMatchers("/internal/**").permitAll()
                         .requestMatchers("/error").permitAll()
                         .requestMatchers("/api/v1/admin/**").hasRole("ADMIN")
                         .anyRequest().hasAnyRole("USER", "ADMIN"))
                 // Behind the gateway: only calls that carry the gateway's secret are served (see InternalAuthFilter).
                 .addFilterBefore(new InternalAuthFilter(internalSecret), BearerTokenAuthenticationFilter.class)
+                .addFilterBefore(new AccountDeletionAuthFilter(deletionSecret), BearerTokenAuthenticationFilter.class)
                 .oauth2ResourceServer(oauth -> oauth.jwt(jwt -> jwt.jwtAuthenticationConverter(jwtAuthenticationConverter())))
                 .build();
     }

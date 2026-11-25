@@ -8,7 +8,7 @@ import java.util.UUID;
 public record PollResponse(UUID id, String ownerId, String title, String description,
                            PollStatus status, AccessType accessType, boolean anonymous,
                            boolean allowVoteChange, boolean blocked, UUID shareToken, Instant createdAt, Instant updatedAt,
-                           Instant publishedAt, Instant closedAt, Instant archivedAt,
+                           Instant publishedAt, Instant closedAt, Instant archivedAt, Instant endsAt,
                            List<QuestionResponse> questions) {
     public record QuestionResponse(UUID id, String text, QuestionType type,
                                    List<AnswerOptionResponse> options) { }

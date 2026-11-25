@@ -19,7 +19,7 @@ public class PollMapper {
                 poll.getStatus(), poll.getAccessType(), poll.isAnonymous(), poll.isAllowVoteChange(), poll.isBlocked(),
                 includeShareToken ? poll.getShareToken() : null,
                 poll.getCreatedAt(), poll.getUpdatedAt(), poll.getPublishedAt(), poll.getClosedAt(),
-                poll.getArchivedAt(), poll.getQuestions().stream().map(q ->
+                poll.getArchivedAt(), poll.getEndsAt(), poll.getQuestions().stream().map(q ->
                 new PollResponse.QuestionResponse(q.getId(), q.getText(), q.getType(),
                         q.getOptions().stream().map(o ->
                                 new PollResponse.AnswerOptionResponse(o.getId(), o.getText())).toList())).toList());
@@ -27,6 +27,6 @@ public class PollMapper {
 
     public PollSummaryResponse summary(Poll poll) {
         return new PollSummaryResponse(poll.getId(), poll.getTitle(), poll.getStatus(),
-                poll.getAccessType(), poll.isAnonymous(), poll.isBlocked(), poll.getCreatedAt());
+                poll.getAccessType(), poll.isAnonymous(), poll.isBlocked(), poll.getCreatedAt(), poll.getEndsAt());
     }
 }

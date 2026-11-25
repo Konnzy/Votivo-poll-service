@@ -43,6 +43,7 @@ public class Poll {
     private Instant publishedAt;
     private Instant closedAt;
     private Instant archivedAt;
+    private Instant endsAt;
     @OneToMany(mappedBy = "poll", cascade = CascadeType.ALL, orphanRemoval = true)
     @OrderColumn(name = "position")
     private List<Question> questions = new ArrayList<>();
@@ -89,6 +90,8 @@ public class Poll {
     }
 
     public void allowVoteChange(boolean allowed) { this.allowVoteChange = allowed; }
+    public void endsAt(Instant endsAt) { this.endsAt = endsAt; }
+    public Instant getEndsAt() { return endsAt; }
 
     public void block() { this.blocked = true; this.updatedAt = Instant.now(); }
     public UUID getId() { return id; }
