@@ -51,8 +51,11 @@ public class PollService {
 
     public PollResponse get(UUID id) {
         var poll = find(id);
+        if (poll.isBlocked() && !users.current().map(user -> user.admin()).orElse(false)) {
+            throw new PollNotFoundException();
+        }
         boolean manager = access.canManage(poll);
-        if (!manager && (poll.isBlocked() || poll.getStatus() == PollStatus.DRAFT
+        if (!manager && (poll.getStatus() == PollStatus.DRAFT
                 || poll.getAccessType() != AccessType.PUBLIC)) throw new PollNotFoundException();
         return mapper.response(poll, manager);
     }
@@ -105,11 +108,7 @@ public class PollService {
     @Transactional
     @PreAuthorize("!hasRole('ADMIN')")
     public PollResponse close(UUID id) {
-        var poll = owned(id);
-        validation.requireState(poll, PollStatus.PUBLISHED);
-        poll.close();
-        events.pollEnded(poll, PollEvents.REASON_CLOSED);
-        return mapper.response(poll, true);
+        return closePublished(owned(id));
     }
 
     @Transactional
@@ -138,6 +137,22 @@ public class PollService {
         boolean takingVotes = poll.getStatus() == PollStatus.PUBLISHED && !poll.isBlocked();
         poll.block();
         if (takingVotes) events.pollEnded(poll, PollEvents.REASON_BLOCKED);
+        return mapper.response(poll, true);
+    }
+
+    @Transactional
+    @PreAuthorize("hasRole('ADMIN')")
+    public PollResponse closeAsAdmin(UUID id) {
+        var poll = find(id);
+        validation.requireNotBlocked(poll);
+        if (poll.getStatus() == PollStatus.CLOSED) return mapper.response(poll, true);
+        return closePublished(poll);
+    }
+
+    private PollResponse closePublished(Poll poll) {
+        validation.requireState(poll, PollStatus.PUBLISHED);
+        poll.close();
+        events.pollEnded(poll, PollEvents.REASON_CLOSED);
         return mapper.response(poll, true);
     }
 
