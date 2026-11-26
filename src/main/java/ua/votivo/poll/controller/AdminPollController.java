@@ -22,4 +22,7 @@ public class AdminPollController {
 
     @PostMapping("/{id}/block")
     public PollResponse block(@PathVariable UUID id) { return service.block(id); }
+
+    @PostMapping("/{id}/close")
+    public PollResponse close(@PathVariable UUID id) { return service.closeAsAdmin(id); }
 }

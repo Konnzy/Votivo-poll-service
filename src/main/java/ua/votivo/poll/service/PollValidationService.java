@@ -24,8 +24,9 @@ public class PollValidationService {
 
     public void requirePublishable(Poll poll) {
         requireEditable(poll);
-        if (poll.getEndsAt() == null || !poll.getEndsAt().isAfter(java.time.Instant.now())) {
-            throw new InvalidPollStateException("Set a future end date before publishing the poll");
+        var endsAt = poll.getEndsAt();
+        if (endsAt != null && !endsAt.isAfter(java.time.Instant.now())) {
+            throw new InvalidPollStateException("Update or remove the past end date before publishing the poll");
         }
         if (poll.getQuestions().isEmpty() || poll.getQuestions().stream().anyMatch(q -> q.getOptions().size() < 2)) {
             throw new InvalidPollStateException("Publication requires at least one question and two options per question");

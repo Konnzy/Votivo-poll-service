@@ -48,13 +48,26 @@ class PollControllerTest {
         mvc.perform(get(BASE + "/mine")).andExpect(status().isUnauthorized());
     }
 
-    @Test void draftsMayOmitDeadlineButPublicationRequiresItAndRejectsPastDates() throws Exception {
+    @Test void pollWithoutDeadlineCanBePublishedAndClosedManually() throws Exception {
         String noDeadline = VALID.replace("\"endsAt\":\"2099-12-31T12:00:00Z\",", "");
         String id = create(noDeadline);
-        mvc.perform(post(BASE + "/" + id + "/publish").with(owner())).andExpect(status().isConflict());
+        transition(id, "publish", "PUBLISHED");
+        expiration.closeIfDue(UUID.fromString(id), java.time.Instant.parse("2099-12-31T12:00:00Z"));
+        mvc.perform(get(BASE + "/" + id)).andExpect(jsonPath("$.status").value("PUBLISHED"))
+                .andExpect(jsonPath("$.endsAt").doesNotExist());
+        assertThat(outbox.findAll()).extracting(OutboxMessage::getRoutingKey).containsExactly("poll.started");
+        transition(id, "close", "CLOSED");
+    }
+
+    @Test void aConfiguredDeadlineMustBeInTheFuture() throws Exception {
         mvc.perform(post(BASE).with(owner()).contentType(MediaType.APPLICATION_JSON)
                 .content(VALID.replace("2099-12-31T12:00:00Z", "2000-01-01T00:00:00Z")))
                 .andExpect(status().isBadRequest());
+        String id = create(VALID);
+        var draft = repository.findById(UUID.fromString(id)).orElseThrow();
+        draft.endsAt(java.time.Instant.EPOCH);
+        repository.saveAndFlush(draft);
+        mvc.perform(post(BASE + "/" + id + "/publish").with(owner())).andExpect(status().isConflict());
         mvc.perform(put(BASE + "/" + id).with(owner()).contentType(MediaType.APPLICATION_JSON).content(VALID))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.endsAt").value("2099-12-31T12:00:00Z"));
         transition(id, "publish", "PUBLISHED");
@@ -189,13 +202,37 @@ class PollControllerTest {
         mvc.perform(post(BASE + "/" + id + "/publish").with(owner())).andExpect(status().isConflict());
     }
 
-    @Test void blockedPublishedPollIsHiddenButOwnerCanCloseIt() throws Exception {
+    @Test void blockedPublishedPollIsVisibleToModeratorsButItsOwnerCanStillCloseIt() throws Exception {
         String id = create(VALID);
         transition(id, "publish", "PUBLISHED");
         mvc.perform(post("/api/v1/admin/polls/" + id + "/block").with(admin())).andExpect(status().isOk());
         mvc.perform(get(BASE + "/" + id)).andExpect(status().isNotFound());
+        mvc.perform(get(BASE + "/" + id).with(other())).andExpect(status().isNotFound());
+        mvc.perform(get(BASE + "/" + id).with(owner())).andExpect(status().isNotFound());
+        mvc.perform(get(BASE + "/" + id).with(admin())).andExpect(status().isOk())
+                .andExpect(jsonPath("$.blocked").value(true));
+        mvc.perform(get(BASE + "/mine").with(owner())).andExpect(status().isOk())
+                .andExpect(jsonPath("$.content[0].blocked").value(true));
         mvc.perform(get(BASE)).andExpect(jsonPath("$.totalElements").value(0));
         transition(id, "close", "CLOSED");
+    }
+
+    @Test void adminCanClosePublishedPollWithoutBlockingItOrSendingDuplicateEndEvents() throws Exception {
+        String id = create(VALID);
+        String endpoint = "/api/v1/admin/polls/" + id + "/close";
+        mvc.perform(post(endpoint).with(owner())).andExpect(status().isForbidden());
+        mvc.perform(post(endpoint).with(admin())).andExpect(status().isConflict());
+        transition(id, "publish", "PUBLISHED");
+
+        mvc.perform(post(endpoint).with(admin())).andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("CLOSED"))
+                .andExpect(jsonPath("$.blocked").value(false))
+                .andExpect(jsonPath("$.closedAt").isNotEmpty());
+        mvc.perform(post(endpoint).with(admin())).andExpect(status().isOk());
+        mvc.perform(get(BASE + "/" + id)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("CLOSED"));
+        assertThat(outbox.findAll().stream().filter(e -> e.getRoutingKey().equals("poll.ended")))
+                .singleElement().satisfies(event -> assertThat(event.getPayload()).contains("\"reason\":\"closed\""));
     }
 
     @Test void rejectsMoreThanFiftyQuestionsAndTwentyOptions() throws Exception {
@@ -249,7 +286,8 @@ class PollControllerTest {
                 .andExpect(status().isConflict());
         mvc.perform(post(BASE + "/" + id + "/publish").with(owner())).andExpect(status().isConflict());
         mvc.perform(get(BASE + "/by-link/" + shareToken)).andExpect(status().isNotFound());
-        mvc.perform(get(BASE + "/" + id).with(owner())).andExpect(status().isOk())
+        mvc.perform(get(BASE + "/" + id).with(owner())).andExpect(status().isNotFound());
+        mvc.perform(get(BASE + "/" + id).with(admin())).andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("DRAFT"))
                 .andExpect(jsonPath("$.blocked").value(true));
     }
